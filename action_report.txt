@@ -1,10 +1,10 @@
-Actions detected in video:
-waving: 641 times
-writing: 1789 times
-using_cellphone: 52 times
-dancing: 759 times
-grimace: 0 times
-walking: 444 times
-raising_arm: 187 times
-greeting: 131 times
-lying_down: 14 times
+Ações detectadas no vídeo:
+waving: 27
+writing: 37
+using_cellphone: 13
+dancing: 19
+grimace: 46
+walking: 74
+raising_arm: 21
+greeting: 16
+lying_down: 2

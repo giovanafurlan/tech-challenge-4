@@ -1,15 +1,33 @@
 import cv2
-from deepface import DeepFace
+import mediapipe as mp
 import os
 from tqdm import tqdm
-import mediapipe as mp
 
-def detect_emotions_and_actions(video_path, output_path):
-    # Initialize MediaPipe for pose detection
+def detect_actions_and_emotions(video_path, output_path):
+    # Inicializar MediaPipe Pose
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    mp_drawing = mp.solutions.drawing_utils
 
-    # Action detection counters
+    # Capturar vídeo do arquivo especificado
+    cap = cv2.VideoCapture(video_path)
+
+    # Verificar se o vídeo foi aberto corretamente
+    if not cap.isOpened():
+        print("Erro ao abrir o vídeo.")
+        return
+
+    # Obter propriedades do vídeo_smaller
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Definir o codec e criar o objeto VideoWriter
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec para MP4
+    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+    # Inicializar contadores de ações
     action_counts = {
         "waving": 0,
         "writing": 0,
@@ -22,174 +40,132 @@ def detect_emotions_and_actions(video_path, output_path):
         "lying_down": 0
     }
 
-    # State tracking to avoid redundant consecutive detections
-    previous_actions = {key: False for key in action_counts}
+    # Variáveis para rastreamento de estado
+    previous_states = {action: False for action in action_counts}
 
-    # Capture video from the specified file
-    cap = cv2.VideoCapture(video_path)
-
-    # Check if the video opened correctly
-    if not cap.isOpened():
-        print("Error opening the video.")
-        return
-
-    # Get video properties
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    # Define the codec and create VideoWriter object
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-
-    # Initial values for previous wrist positions
-    previous_right_wrist_x = 0.0
-    previous_right_wrist_y = 0.0
-
-    # Process each frame in the video
-    for _ in tqdm(range(total_frames), desc="Processing video"):
+    # Processar vídeo com barra de progresso
+    for _ in tqdm(range(total_frames), desc="Processando o vídeo"):
         ret, frame = cap.read()
+
+        # Se não conseguiu ler o frame (final do vídeo), sair do loop
         if not ret:
             break
 
-        # Emotion detection
-        face_result = DeepFace.analyze(frame, actions=['emotion'], enforce_detection=False)
-        for face in face_result:
-            x, y, w, h = face['region']['x'], face['region']['y'], face['region']['w'], face['region']['h']
-            dominant_emotion = face['dominant_emotion']
-            if dominant_emotion:
-                if dominant_emotion == "grimace" and not previous_actions["grimace"]:
-                    action_counts["grimace"] += 1
-                    previous_actions["grimace"] = True
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(frame, dominant_emotion, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
-            else:
-                previous_actions["grimace"] = False
+        # Converter o frame para RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Pose detection for action recognition
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pose_results = pose.process(frame_rgb)
+        # Processar o frame para detectar a pose
+        results = pose.process(rgb_frame)
 
-        if pose_results.pose_landmarks:
-            landmarks = pose_results.pose_landmarks.landmark
+        # Desenhar landmarks e verificar ações
+        if results.pose_landmarks:
+            mp_drawing.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
-            # Check for waving gesture (movement of wrist above head level)
-            is_waving = (landmarks[mp_pose.PoseLandmark.LEFT_WRIST].y < landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y) or \
-                        (landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].y < landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y)
-            if is_waving and not previous_actions["waving"]:
-                action_counts["waving"] += 1
-                previous_actions["waving"] = True
-            else:
-                previous_actions["waving"] = False
+            landmarks = results.pose_landmarks.landmark
 
-            # Check for raised arm gesture
-            is_raising_arm = (landmarks[mp_pose.PoseLandmark.LEFT_ELBOW].y < landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y) or \
-                             (landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW].y < landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y)
-            if is_raising_arm and not previous_actions["raising_arm"]:
-                action_counts["raising_arm"] += 1
-                previous_actions["raising_arm"] = True
-            else:
-                previous_actions["raising_arm"] = False
+            # Funções de detecção de ações
+            def is_waving():
+                return landmarks[mp_pose.PoseLandmark.LEFT_WRIST].y < landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y or \
+                       landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].y < landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y
 
-            # Check for walking (movement in leg landmarks over frames)
-            left_foot = landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX].y
-            right_foot = landmarks[mp_pose.PoseLandmark.RIGHT_FOOT_INDEX].y
-            if abs(left_foot - right_foot) > 0.05 and not previous_actions["walking"]:
-                action_counts["walking"] += 1
-                previous_actions["walking"] = True
-            else:
-                previous_actions["walking"] = False
+            def is_raising_arm():
+                return landmarks[mp_pose.PoseLandmark.LEFT_ELBOW].y < landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y or \
+                       landmarks[mp_pose.PoseLandmark.RIGHT_ELBOW].y < landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y
 
-            # Check for waving (upward and downward movement of one hand)
-            left_wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST].y
-            left_elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW].y
-            left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y
+            def is_walking():
+                return abs(landmarks[mp_pose.PoseLandmark.LEFT_FOOT_INDEX].y - landmarks[mp_pose.PoseLandmark.RIGHT_FOOT_INDEX].y) > 0.05
 
-            # Waving if the wrist is significantly above and below the shoulder
-            if left_wrist < left_shoulder - 0.1 and abs(left_elbow - left_wrist) > 0.05 and not previous_actions["waving"]:
-                action_counts["waving"] += 1
-                previous_actions["waving"] = True
-            else:
-                previous_actions["waving"] = False
+            def is_using_cellphone():
+                right_hand = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
+                right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
+                return abs(right_hand.x - right_ear.x) < 0.1 and abs(right_hand.y - right_ear.y) < 0.1
 
-            # Check for writing (small repetitive movements of the wrist)
-            right_wrist_x = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].x
-            right_wrist_y = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].y
-
-            # Writing detected if there is a subtle repetitive movement
-            if abs(right_wrist_x - previous_right_wrist_x) < 0.05 and abs(right_wrist_y - previous_right_wrist_y) < 0.05:
-                action_counts["writing"] += 1
-                previous_actions["writing"] = True
-            else:
-                previous_actions["writing"] = False
-
-            # Store current wrist position for comparison in the next frame
-            previous_right_wrist_x = right_wrist_x
-            previous_right_wrist_y = right_wrist_y
+            def is_lying_down():
+                shoulder_y = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y
+                hip_y = landmarks[mp_pose.PoseLandmark.LEFT_HIP].y
+                knee_y = landmarks[mp_pose.PoseLandmark.LEFT_KNEE].y
+                return abs(shoulder_y - hip_y) < 0.05 and abs(hip_y - knee_y) < 0.05
             
-            # Check for using a cellphone (hand near the head)
-            right_hand = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
-            right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
+            def is_dancing():
+                # Detectar movimentos repetitivos e amplos dos braços ou pernas
+                return abs(landmarks[mp_pose.PoseLandmark.LEFT_WRIST].y - landmarks[mp_pose.PoseLandmark.LEFT_HIP].y) > 0.1 or \
+                       abs(landmarks[mp_pose.PoseLandmark.RIGHT_WRIST].y - landmarks[mp_pose.PoseLandmark.RIGHT_HIP].y) > 0.1
 
-            if abs(right_hand.x - right_ear.x) < 0.1 and abs(right_hand.y - right_ear.y) < 0.1 and not previous_actions["using_cellphone"]:
-                action_counts["using_cellphone"] += 1
-                previous_actions["using_cellphone"] = True
-            else:
-                previous_actions["using_cellphone"] = False
+            def is_grimacing():
+                # Detectar mudanças na posição da cabeça (como inclinação)
+                nose = landmarks[mp_pose.PoseLandmark.NOSE]
+                left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
+                right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
+                return abs(nose.x - left_ear.x) < 0.05 or abs(nose.x - right_ear.x) < 0.05
 
-            # Check for dancing (detect broad movement in arms and legs)
-            left_arm_movement = abs(left_wrist - left_shoulder)
-            right_leg_movement = abs(right_foot - landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y)
+            def is_greeting():
+                # Detectar mão elevada próximo ao rosto com movimento de aceno
+                left_hand = landmarks[mp_pose.PoseLandmark.LEFT_WRIST]
+                left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
+                right_hand = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
+                right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
+                return (abs(left_hand.x - left_ear.x) < 0.1 and abs(left_hand.y - left_ear.y) < 0.1) or \
+                       (abs(right_hand.x - right_ear.x) < 0.1 and abs(right_hand.y - right_ear.y) < 0.1)
 
-            if left_arm_movement > 0.1 and right_leg_movement > 0.1 and not previous_actions["dancing"]:
-                action_counts["dancing"] += 1
-                previous_actions["dancing"] = True
-            else:
-                previous_actions["dancing"] = False
-                
-            # Check for greeting (short upward movement of the hand)
-            if left_wrist < left_shoulder - 0.1 and not previous_actions["greeting"]:
-                action_counts["greeting"] += 1
-                previous_actions["greeting"] = True
-            else:
-                previous_actions["greeting"] = False
+            def is_writing():
+                # Detectar a mão dominante (direita) próxima ao nível da cintura
+                right_hand = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST]
+                right_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
+                return abs(right_hand.y - right_hip.y) < 0.1
 
-            # Check for lying down (torso and legs at similar y-values)
-            shoulder_y = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y
-            hip_y = landmarks[mp_pose.PoseLandmark.LEFT_HIP].y
-            knee_y = landmarks[mp_pose.PoseLandmark.LEFT_KNEE].y
+            # Lista de ações e suas funções de detecção
+            actions = {
+                "waving": is_waving,
+                "raising_arm": is_raising_arm,
+                "walking": is_walking,
+                "using_cellphone": is_using_cellphone,
+                "lying_down": is_lying_down,
+                "dancing": is_dancing,
+                "grimace": is_grimacing,
+                "greeting": is_greeting,
+                "writing": is_writing
+            }
 
-            if abs(shoulder_y - hip_y) < 0.05 and abs(hip_y - knee_y) < 0.05 and not previous_actions["lying_down"]:
-                action_counts["lying_down"] += 1
-                previous_actions["lying_down"] = True
-            else:
-                previous_actions["lying_down"] = False
-    
-        # Write the processed frame to the output video
+            # Verificar ações detectadas
+            for action, detector in actions.items():
+                if detector() and not previous_states[action]:
+                    action_counts[action] += 1
+                    previous_states[action] = True
+                elif not detector():
+                    previous_states[action] = False
+
+            # Exibir contadores no frame
+            y_offset = 30
+            for action, count in action_counts.items():
+                cv2.putText(frame, f"{action}: {count}", (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                y_offset += 20
+
+        # Escrever o frame processado no vídeo de saída
         out.write(frame)
 
-    # Release video capture and writer
+    # Liberar recursos
     cap.release()
     out.release()
     cv2.destroyAllWindows()
 
-    # Print action report
-    print("Actions detected in video:")
+    # Exibir contagem final de ações
+    print("Ações detectadas:")
     for action, count in action_counts.items():
-        print(f"{action}: {count} times")
-        
-    # Create and save a text report of the actions detected
-    report_path = os.path.join(os.path.dirname(output_path), 'action_report.txt')
+        print(f"{action}: {count}")
+
+    # Salvar relatório em um arquivo de texto
+    report_path = os.path.join(os.path.dirname(output_path), 'action_report_smaller.txt')
     with open(report_path, 'w') as report_file:
-        report_file.write("Actions detected in video:\n")
+        report_file.write("Ações detectadas no vídeo:\n")
         for action, count in action_counts.items():
-            report_file.write(f"{action}: {count} times\n")
+            report_file.write(f"{action}: {count}\n")
+    print(f"Relatório salvo em: {report_path}")
 
-    print(f"Action report saved to: {report_path}")
 
-# Set video paths and call the function
+# Caminho do vídeo de entrada e saída
 script_dir = os.path.dirname(os.path.abspath(__file__))
-input_video_path = os.path.join(script_dir, 'video.mp4')
-output_video_path = os.path.join(script_dir, 'output_video.mp4')
-detect_emotions_and_actions(input_video_path, output_video_path)
+input_video_path = os.path.join(script_dir, 'video_smaller.mp4')
+output_video_path = os.path.join(script_dir, 'output_video_smaller.mp4')
+
+# Executar a função
+detect_actions_and_emotions(input_video_path, output_video_path)

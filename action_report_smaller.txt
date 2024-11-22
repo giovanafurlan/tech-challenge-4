@@ -1,0 +1,10 @@
+Ações detectadas no vídeo:
+waving: 15
+writing: 12
+using_cellphone: 8
+dancing: 9
+grimace: 1
+walking: 16
+raising_arm: 8
+greeting: 5
+lying_down: 4
